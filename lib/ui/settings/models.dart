@@ -21,4 +21,31 @@ class ChannelConfig {
     required this.selectedModel,
     this.isDefault = false,
   });
+
+  // ===== JSON =====
+  factory ChannelConfig.fromJson(Map<String, dynamic> json) {
+    return ChannelConfig(
+      name: json['name'],
+      type: ChannelType.values.firstWhere(
+        (e) => e.name == json['type'],
+      ),
+      apiUrl: json['apiUrl'],
+      apiKey: json['apiKey'],
+      models: List<String>.from(json['models']),
+      selectedModel: json['selectedModel'],
+      isDefault: json['isDefault'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'type': type.name,
+      'apiUrl': apiUrl,
+      'apiKey': apiKey,
+      'models': models,
+      'selectedModel': selectedModel,
+      'isDefault': isDefault,
+    };
+  }
 }

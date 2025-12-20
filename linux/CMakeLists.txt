@@ -126,3 +126,7 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# ==== FIX flutter_secure_storage build error ====
+add_compile_options(-Wno-deprecated-literal-operator)
+add_compile_options(-Wno-error=deprecated-literal-operator)

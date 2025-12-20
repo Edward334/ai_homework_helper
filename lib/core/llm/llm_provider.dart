@@ -3,4 +3,9 @@ abstract class LLMProvider {
     required String prompt,
     required String model,
   });
+
+  Stream<String> chatStream({
+    required String prompt,
+    required String model,
+  });
 }

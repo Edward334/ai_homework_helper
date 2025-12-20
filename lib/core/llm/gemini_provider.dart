@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
+
 import 'llm_provider.dart';
 
 class GeminiProvider implements LLMProvider {
@@ -7,33 +10,110 @@ class GeminiProvider implements LLMProvider {
 
   GeminiProvider({required this.apiKey});
 
+  Uri _generateContentUri(String model) {
+    // generateContent 端点见官方文档 :contentReference[oaicite:2]{index=2}
+    return Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
+    );
+  }
+
+  Uri _streamGenerateContentUri(String model) {
+    // streamGenerateContent + alt=sse 见官方文档 :contentReference[oaicite:3]{index=3}
+    return Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey',
+    );
+  }
+
+  Map<String, dynamic> _body(String prompt) {
+    return {
+      'contents': [
+        {
+          'parts': [
+            {'text': prompt}
+          ]
+        }
+      ]
+    };
+  }
+
+  String _extractTextFromResponse(Map<String, dynamic> data) {
+    final candidates = (data['candidates'] as List?) ?? const [];
+    if (candidates.isEmpty) return '';
+
+    final content = candidates[0]['content'] as Map<String, dynamic>?;
+    final parts = (content?['parts'] as List?) ?? const [];
+    if (parts.isEmpty) return '';
+
+    final text = parts[0]['text'];
+    return text is String ? text : '';
+  }
+
   @override
   Future<String> chat({
     required String prompt,
     required String model,
   }) async {
-    final url =
-        'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey';
+    final uri = _generateContentUri(model);
 
     final res = await http.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'contents': [
-          {
-            'parts': [
-              {'text': prompt}
-            ]
-          }
-        ]
-      }),
+      uri,
+      headers: {
+        HttpHeaders.contentTypeHeader: 'application/json',
+      },
+      body: jsonEncode(_body(prompt)),
     );
 
-    if (res.statusCode != 200) {
-      throw Exception('Gemini API error: ${res.body}');
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('Gemini error ${res.statusCode}: ${res.body}');
     }
 
-    final data = jsonDecode(res.body);
-    return data['candidates'][0]['content']['parts'][0]['text'];
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return _extractTextFromResponse(data);
+  }
+
+  @override
+  Stream<String> chatStream({
+    required String prompt,
+    required String model,
+  }) async* {
+    final uri = _streamGenerateContentUri(model);
+
+    final client = HttpClient();
+    try {
+      final req = await client.postUrl(uri);
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+
+      req.write(jsonEncode(_body(prompt)));
+
+      final res = await req.close();
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        final body = await res.transform(utf8.decoder).join();
+        throw Exception('Gemini stream error ${res.statusCode}: $body');
+      }
+
+      // SSE: data: {GenerateContentResponse JSON}\n\n
+      await for (final line
+          in res.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (!line.startsWith('data:')) continue;
+
+        final payload = line.substring(5).trim();
+        if (payload.isEmpty) continue;
+
+        Map<String, dynamic> obj;
+        try {
+          obj = jsonDecode(payload) as Map<String, dynamic>;
+        } catch (_) {
+          continue;
+        }
+
+        final text = _extractTextFromResponse(obj);
+        if (text.isNotEmpty) {
+          yield text;
+        }
+      }
+    } finally {
+      client.close(force: true);
+    }
   }
 }

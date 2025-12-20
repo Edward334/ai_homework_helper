@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../settings/models.dart';
-import '../../../core/llm/llm_client.dart';
+import '../../core/channel/channel_scope.dart';
+import '../../core/llm/llm_client.dart';
+import '../common/markdown_view.dart';
 
 enum QuestionStatus {
   loading,
@@ -12,12 +13,12 @@ enum QuestionStatus {
 class QuestionItem {
   final String title;
   QuestionStatus status;
-  String? answer;
+  String answer;
 
   QuestionItem({
     required this.title,
     this.status = QuestionStatus.loading,
-    this.answer,
+    this.answer = '',
   });
 }
 
@@ -32,64 +33,74 @@ class _ResultPageState extends State<ResultPage> {
   int selectedIndex = 0;
   late List<QuestionItem> questions;
 
-  /// ⚠️ 临时：当前默认渠道（下一步会统一管理）
-  late ChannelConfig currentChannel;
+  bool _started = false;
 
   @override
   void initState() {
     super.initState();
 
-    // ====== 假题目（来自 OCR / PDF）======
     questions = [
-      QuestionItem(title: '解方程:x² + 3x + 2 = 0'),
+      QuestionItem(title: '解方程：x² + 3x + 2 = 0'),
       QuestionItem(title: '求函数的最值'),
       QuestionItem(title: '证明题示例'),
     ];
-
-    // ====== 临时默认渠道（先能跑）======
-    currentChannel = ChannelConfig(
-      name: '默认 OpenAI',
-      type: ChannelType.openai,
-      apiUrl: 'https://yunwu.ai/v1',
-      apiKey: 'sk-zzzzz', // 👈 先填你的 key
-      models: ['gemini-2.5-flash'],
-      selectedModel: 'gemini-2.5-flash',
-      isDefault: true,
-    );
-
-    _loadAnswersWithLLM();
   }
 
-  /// ================= 真实 LLM 调用 =================
-  Future<void> _loadAnswersWithLLM() async {
-    final provider = LLMClient.fromChannel(currentChannel);
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    _loadAnswersStream();
+  }
 
-    for (int i = 0; i < questions.length; i++) {
+  Future<void> _loadAnswersStream() async {
+    final channel = ChannelScope.of(context).defaultChannel;
+    final provider = LLMClient.fromChannel(channel);
+
+    for (final q in questions) {
+      // 如果已完成/失败就跳过
+      if (q.status != QuestionStatus.loading || q.answer.isNotEmpty) {
+        continue;
+      }
+
       try {
-        final answer = await provider.chat(
-          prompt: '''
-你是一名耐心的作业辅导老师。
-请逐步讲解下面这道题，并给出最终答案：
+        // 让模型用 Markdown + LaTeX 输出
+        final buffer = StringBuffer()
+          ..writeln('你是一名老师')
+          ..writeln('请使用 Markdown 输出，涉及数学请用 LaTeX：')
+          ..writeln('- 行内公式用 \$...\$')
+          ..writeln('- 独立推导/公式块用 \$\$...\$\$')
+          ..writeln('请按“题目分析 → 解题步骤 → 最终答案 → 易错点”结构回答。')
+          ..writeln()
+          ..writeln('题目：')
+          ..writeln(q.title);
 
-${questions[i].title}
-''',
-          model: currentChannel.selectedModel,
-        );
+        final prompt = buffer.toString();
 
+        await for (final chunk in provider.chatStream(
+          prompt: prompt,
+          model: channel.selectedModel,
+        )) {
+          if (!mounted) return;
+          setState(() {
+            q.answer += chunk;
+          });
+        }
+
+        if (!mounted) return;
         setState(() {
-          questions[i].status = QuestionStatus.done;
-          questions[i].answer = answer;
+          q.status = QuestionStatus.done;
         });
       } catch (e) {
+        if (!mounted) return;
         setState(() {
-          questions[i].status = QuestionStatus.error;
-          questions[i].answer = e.toString();
+          q.status = QuestionStatus.error;
+          q.answer = '解析失败：$e';
         });
       }
     }
   }
-
-  // =================================================
 
   @override
   Widget build(BuildContext context) {
@@ -124,9 +135,7 @@ ${questions[i].title}
                 title: Text('第 ${index + 1} 题'),
                 subtitle: Text(q.title),
                 trailing: _statusIcon(q.status),
-                onTap: () {
-                  setState(() => selectedIndex = index);
-                },
+                onTap: () => setState(() => selectedIndex = index),
               );
             },
           ),
@@ -159,9 +168,7 @@ ${questions[i].title}
                     ],
                   ),
                   selected: index == selectedIndex,
-                  onSelected: (_) {
-                    setState(() => selectedIndex = index);
-                  },
+                  onSelected: (_) => setState(() => selectedIndex = index),
                 ),
               );
             },
@@ -177,7 +184,8 @@ ${questions[i].title}
   Widget _buildContent() {
     final q = questions[selectedIndex];
 
-    if (q.status == QuestionStatus.loading) {
+    // 还没收到任何 chunk 时，显示 loading 占位
+    if (q.status == QuestionStatus.loading && q.answer.isEmpty) {
       return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -190,15 +198,8 @@ ${questions[i].title}
       );
     }
 
-    if (q.status == QuestionStatus.error) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          q.answer ?? '解析失败',
-          style: const TextStyle(color: Colors.red),
-        ),
-      );
-    }
+    // 已经开始流式输出：边显示边转圈（更像产品）
+    final showSpinner = q.status == QuestionStatus.loading && q.answer.isNotEmpty;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -208,13 +209,29 @@ ${questions[i].title}
             '题目：\n${q.title}',
             style: const TextStyle(fontSize: 18),
           ),
-          const SizedBox(height: 24),
-          const Text(
-            '解析：',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(q.answer ?? ''),
+          const SizedBox(height: 16),
+          if (showSpinner)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('生成中…'),
+                ],
+              ),
+            ),
+          if (q.status == QuestionStatus.error)
+            Text(
+              q.answer,
+              style: const TextStyle(color: Colors.red),
+            )
+          else
+            MarkdownView(q.answer),
         ],
       ),
     );

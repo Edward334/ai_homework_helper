@@ -1,54 +1,25 @@
 import 'package:flutter/material.dart';
+
+import '../../core/channel/channel_scope.dart';
+import '../../core/channel/channel_store.dart';
 import 'models.dart';
 import 'channel_edit_page.dart';
 
-class SettingsPage extends StatefulWidget {
+class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  final List<ChannelConfig> channels = [
-    ChannelConfig(
-      name: '默认 OpenAI',
-      type: ChannelType.openai,
-      apiUrl: 'https://api.openai.com/v1',
-      apiKey: '',
-      models: ['gpt-4o-mini', 'gpt-4.1'],
-      selectedModel: 'gpt-4o-mini',
-      isDefault: true,
-    ),
-  ];
-
-  void _setDefault(ChannelConfig channel) {
-    setState(() {
-      for (final c in channels) {
-        c.isDefault = false;
-      }
-      channel.isDefault = true;
-    });
-  }
-
-  void _deleteChannel(ChannelConfig channel) {
-    if (channel.isDefault || channels.length <= 1) return;
-
-    setState(() {
-      channels.remove(channel);
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final defaultChannel =
-        channels.firstWhere((c) => c.isDefault, orElse: () => channels.first);
+    final store = ChannelScope.of(context);
+    final channels = store.channels;
+    final defaultChannel = store.defaultChannel;
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ===== 默认渠道 =====
           const Text(
             '默认渠道',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -57,10 +28,12 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             title: Text(defaultChannel.name),
             subtitle: Text(defaultChannel.selectedModel),
+            leading: const Icon(Icons.check_circle, color: Colors.green),
           ),
 
           const Divider(height: 32),
 
+          // ===== 渠道列表 =====
           const Text(
             '渠道列表',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -79,9 +52,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 trailing: PopupMenuButton<String>(
                   onSelected: (value) {
                     if (value == 'default') {
-                      _setDefault(channel);
+                      store.setDefault(channel);
                     } else if (value == 'delete') {
-                      _confirmDelete(context, channel);
+                      _confirmDelete(context, store, channel);
                     }
                   },
                   itemBuilder: (context) => [
@@ -106,7 +79,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       builder: (_) => ChannelEditPage(channel: channel),
                     ),
                   );
-                  setState(() {});
+
+                  // ✅ 关键：编辑完成后立刻保存
+                  store.save();
                 },
               ),
             );
@@ -134,9 +109,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               );
 
-              setState(() {
-                channels.add(newChannel);
-              });
+              store.addChannel(newChannel);
             },
           ),
         ],
@@ -144,7 +117,11 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  void _confirmDelete(BuildContext context, ChannelConfig channel) {
+  void _confirmDelete(
+    BuildContext context,
+    ChannelStore store,
+    ChannelConfig channel,
+  ) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -158,7 +135,7 @@ class _SettingsPageState extends State<SettingsPage> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _deleteChannel(channel);
+              store.removeChannel(channel);
             },
             child: const Text(
               '删除',
