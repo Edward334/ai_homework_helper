@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../../ui/settings/models.dart';
 import '../fs/app_paths.dart';
