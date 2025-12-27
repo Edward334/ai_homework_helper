@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
+import '../../ui/settings/models.dart';
 import '../common/markdown_view.dart';
 
 enum QuestionStatus {
@@ -34,6 +35,7 @@ class _ResultPageState extends State<ResultPage> {
   late List<QuestionItem> questions;
 
   bool _started = false;
+  late ChannelConfig _currentChannel; // 新增：存储获取到的 channel
 
   @override
   void initState() {
@@ -51,12 +53,19 @@ class _ResultPageState extends State<ResultPage> {
     super.didChangeDependencies();
     if (_started) return;
     _started = true;
+    debugPrint('ResultPage didChangeDependencies context: $context');
+    final scope = context.dependOnInheritedWidgetOfExactType<ChannelScope>();
+    debugPrint('ChannelScope found in didChangeDependencies: $scope');
+
+    // 在这里获取 channel 并存储
+    _currentChannel = ChannelScope.of(context).defaultChannel;
+
     _loadAnswersStream();
   }
 
   Future<void> _loadAnswersStream() async {
-    final channel = ChannelScope.of(context).defaultChannel;
-    final provider = LLMClient.fromChannel(channel);
+    // 使用存储的 _currentChannel
+    final provider = LLMClient.fromChannel(_currentChannel);
 
     for (final q in questions) {
       // 如果已完成/失败就跳过
@@ -68,9 +77,7 @@ class _ResultPageState extends State<ResultPage> {
         // 让模型用 Markdown + LaTeX 输出
         final buffer = StringBuffer()
           ..writeln('你是一名老师')
-          ..writeln('请使用 Markdown 输出，涉及数学请用 LaTeX：')
-          ..writeln('- 行内公式用 \$...\$')
-          ..writeln('- 独立推导/公式块用 \$\$...\$\$')
+          ..writeln('请使用 Markdown 输出：')
           ..writeln('请按“题目分析 → 解题步骤 → 最终答案 → 易错点”结构回答。')
           ..writeln()
           ..writeln('题目：')
@@ -80,8 +87,9 @@ class _ResultPageState extends State<ResultPage> {
 
         await for (final chunk in provider.chatStream(
           prompt: prompt,
-          model: channel.selectedModel,
+          model: _currentChannel.selectedModel,
         )) {
+          debugPrint('Received chunk: $chunk');
           if (!mounted) return;
           setState(() {
             q.answer += chunk;
@@ -92,12 +100,16 @@ class _ResultPageState extends State<ResultPage> {
         setState(() {
           q.status = QuestionStatus.done;
         });
+        print('''Final answer for ${q.title}:
+${q.answer}'''); // Corrected print statement
       } catch (e) {
         if (!mounted) return;
         setState(() {
           q.status = QuestionStatus.error;
           q.answer = '解析失败：$e';
         });
+        print('''Error answer for ${q.title}:
+${q.answer}'''); // Corrected print statement
       }
     }
   }
@@ -230,8 +242,8 @@ class _ResultPageState extends State<ResultPage> {
               q.answer,
               style: const TextStyle(color: Colors.red),
             )
-          else
-            MarkdownView(q.answer),
+          else if (q.answer.isNotEmpty) // 只有当 answer 不为空时才显示 MarkdownView
+          MarkdownView(q.answer),
         ],
       ),
     );

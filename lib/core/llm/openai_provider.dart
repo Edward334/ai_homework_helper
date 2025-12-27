@@ -36,7 +36,7 @@ class OpenAIProvider implements LLMProvider {
       body: jsonEncode({
         'model': model,
         'messages': [
-          {'role': 'user', 'content': prompt},
+          {'role': 'user', 'content': Uri.encodeComponent(prompt)},
         ],
       }),
     );
@@ -70,7 +70,7 @@ class OpenAIProvider implements LLMProvider {
         'model': model,
         'stream': true,
         'messages': [
-          {'role': 'user', 'content': prompt},
+          {'role': 'user', 'content': Uri.encodeComponent(prompt)},
         ],
       }));
 

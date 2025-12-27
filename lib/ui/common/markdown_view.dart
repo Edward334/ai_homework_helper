@@ -38,6 +38,11 @@ class MathElementBuilder extends MarkdownElementBuilder {
     final tex = element.textContent;
     final display = element.attributes['display'] == 'true';
 
+    // 添加空值检查
+    if (tex == null || tex.isEmpty) {
+      return const SizedBox.shrink(); // 如果 tex 为空，则返回一个空的 widget
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Math.tex(
@@ -100,9 +105,14 @@ class MathBlockSyntax extends md.BlockSyntax {
       }
     }
 
+    final content = buffer.toString().trim();
+    if (content.isEmpty) { // 如果内容为空，则不创建 math 节点
+      return null;
+    }
+
     return md.Element.text(
       'math',
-      buffer.toString().trim(),
+      content,
     )..attributes['display'] = 'true';
   }
 }

@@ -19,11 +19,11 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChannelScope(
+    return ChannelScope( // 将 ChannelScope 放在 MaterialApp 之外
       notifier: store,
-      child: const MaterialApp(
+      child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: HomePage(),
+        home: const HomePage(), // HomePage 现在可以访问 ChannelScope 了
       ),
     );
   }
