@@ -108,17 +108,15 @@ class _ChannelEditPageState extends State<ChannelEditPage> {
           ),
 
           ...channel.models.map(
-            (m) => ListTile(
+            (m) => RadioListTile<String>(
               title: Text(m),
-              leading: Radio<String>(
-                value: m,
-                groupValue: channel.selectedModel,
-                onChanged: (v) {
-                  if (v != null) {
-                    setState(() => channel.selectedModel = v);
-                  }
-                },
-              ),
+              value: m,
+              groupValue: channel.selectedModel,
+              onChanged: (v) {
+                if (v != null) {
+                  setState(() => channel.selectedModel = v);
+                }
+              },
             ),
           ),
 

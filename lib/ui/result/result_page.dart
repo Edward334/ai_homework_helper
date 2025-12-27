@@ -1,7 +1,9 @@
+import 'dart:convert'; // 用于 JSON 解析
 import 'package:flutter/material.dart';
 
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
+import '../../core/recognition/question_recognizer.dart'; // 导入 QuestionRecognizer
 import '../../ui/settings/models.dart';
 import '../common/markdown_view.dart';
 
@@ -15,16 +17,20 @@ class QuestionItem {
   final String title;
   QuestionStatus status;
   String answer;
+  String explanation; // 新增：解析
 
   QuestionItem({
     required this.title,
     this.status = QuestionStatus.loading,
     this.answer = '',
+    this.explanation = '', // 初始化
   });
 }
 
 class ResultPage extends StatefulWidget {
-  const ResultPage({super.key});
+  final String filePath; // 新增：文件路径
+
+  const ResultPage({super.key, required this.filePath}); // 修改构造函数
 
   @override
   State<ResultPage> createState() => _ResultPageState();
@@ -32,10 +38,11 @@ class ResultPage extends StatefulWidget {
 
 class _ResultPageState extends State<ResultPage> {
   int selectedIndex = 0;
-  late List<QuestionItem> questions;
+  List<QuestionItem> questions = []; // 初始化为空列表
 
   bool _started = false;
-  late ChannelConfig _currentChannel; // 新增：存储获取到的 channel
+  late ChannelConfig _currentChannel;
+  late QuestionRecognizer _questionRecognizer; // 新增：QuestionRecognizer
 
   @override
   void initState() {
@@ -57,61 +64,63 @@ class _ResultPageState extends State<ResultPage> {
     final scope = context.dependOnInheritedWidgetOfExactType<ChannelScope>();
     debugPrint('ChannelScope found in didChangeDependencies: $scope');
 
-    // 在这里获取 channel 并存储
     _currentChannel = ChannelScope.of(context).defaultChannel;
+    _questionRecognizer = QuestionRecognizer( // 初始化 QuestionRecognizer
+      llmProvider: LLMClient.fromChannel(_currentChannel),
+      model: _currentChannel.selectedModel,
+    );
 
-    _loadAnswersStream();
+    _recognizeAndLoadAnswers(); // 调用新的识别方法
+  }
+
+  Future<void> _recognizeAndLoadAnswers() async {
+    try {
+      String recognizedJson;
+      // 根据文件类型调用不同的识别方法
+      if (widget.filePath.endsWith('.pdf')) {
+        recognizedJson = await _questionRecognizer.recognizeQuestionFromPdf(widget.filePath);
+      } else {
+        recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(widget.filePath);
+      }
+
+      final Map<String, dynamic> data = jsonDecode(recognizedJson);
+      final List<dynamic> questionList = data['questions'] ?? [];
+
+      if (!mounted) return;
+      setState(() {
+        questions = questionList.map((item) {
+          return QuestionItem(
+            title: item['question'] ?? '未知题目',
+            answer: item['answer'] ?? '暂无答案',
+            explanation: item['explanation'] ?? '暂无解析',
+          );
+        }).toList();
+      });
+
+      _loadAnswersStream(); // 继续加载答案流
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        questions = [
+          QuestionItem(
+            title: '识别失败',
+            status: QuestionStatus.error,
+            answer: '识别失败：$e',
+            explanation: '',
+          )
+        ];
+      });
+      // print('识别失败：$e');
+    }
   }
 
   Future<void> _loadAnswersStream() async {
-    // 使用存储的 _currentChannel
-    final provider = LLMClient.fromChannel(_currentChannel);
-
-    for (final q in questions) {
-      // 如果已完成/失败就跳过
-      if (q.status != QuestionStatus.loading || q.answer.isNotEmpty) {
-        continue;
+    if (!mounted) return;
+    setState(() {
+      for (final q in questions) {
+        q.status = QuestionStatus.done; // 假设识别成功后，直接标记为完成
       }
-
-      try {
-        // 让模型用 Markdown + LaTeX 输出
-        final buffer = StringBuffer()
-          ..writeln('你是一名老师')
-          ..writeln('请使用 Markdown 输出：')
-          ..writeln('请按“题目分析 → 解题步骤 → 最终答案 → 易错点”结构回答。')
-          ..writeln()
-          ..writeln('题目：')
-          ..writeln(q.title);
-
-        final prompt = buffer.toString();
-
-        await for (final chunk in provider.chatStream(
-          prompt: prompt,
-          model: _currentChannel.selectedModel,
-        )) {
-          debugPrint('Received chunk: $chunk');
-          if (!mounted) return;
-          setState(() {
-            q.answer += chunk;
-          });
-        }
-
-        if (!mounted) return;
-        setState(() {
-          q.status = QuestionStatus.done;
-        });
-        print('''Final answer for ${q.title}:
-${q.answer}'''); // Corrected print statement
-      } catch (e) {
-        if (!mounted) return;
-        setState(() {
-          q.status = QuestionStatus.error;
-          q.answer = '解析失败：$e';
-        });
-        print('''Error answer for ${q.title}:
-${q.answer}'''); // Corrected print statement
-      }
-    }
+    });
   }
 
   @override
@@ -204,46 +213,39 @@ ${q.answer}'''); // Corrected print statement
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('正在解析本题…'),
+            Text('正在识别题目…'), // 修改提示
           ],
         ),
       );
     }
-
-    // 已经开始流式输出：边显示边转圈（更像产品）
-    final showSpinner = q.status == QuestionStatus.loading && q.answer.isNotEmpty;
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: ListView(
         children: [
           Text(
-            '题目：\n${q.title}',
+            '题目：${q.title}',
             style: const TextStyle(fontSize: 18),
           ),
           const SizedBox(height: 16),
-          if (showSpinner)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 12),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text('生成中…'),
-                ],
-              ),
-            ),
           if (q.status == QuestionStatus.error)
             Text(
-              q.answer,
+              q.answer, // 错误信息
               style: const TextStyle(color: Colors.red),
             )
-          else if (q.answer.isNotEmpty) // 只有当 answer 不为空时才显示 MarkdownView
-          MarkdownView(q.answer),
+          else ...[
+            const Text(
+              '答案：',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            MarkdownView(q.answer),
+            const SizedBox(height: 16),
+            const Text(
+              '解析：',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            MarkdownView(q.explanation),
+          ],
         ],
       ),
     );

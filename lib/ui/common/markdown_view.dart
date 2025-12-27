@@ -39,7 +39,7 @@ class MathElementBuilder extends MarkdownElementBuilder {
     final display = element.attributes['display'] == 'true';
 
     // 添加空值检查
-    if (tex == null || tex.isEmpty) {
+    if (tex.isEmpty) {
       return const SizedBox.shrink(); // 如果 tex 为空，则返回一个空的 widget
     }
 

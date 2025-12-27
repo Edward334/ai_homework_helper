@@ -19,9 +19,55 @@ class OpenAIProvider implements LLMProvider {
     return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
   }
 
+  List<Map<String, dynamic>> _buildMessages(
+      List<Map<String, dynamic>> content) {
+    return [
+      {
+        'role': 'user',
+        'content': content.map((part) {
+          if (part['text'] != null) {
+            return {'type': 'text', 'text': part['text']};
+          } else if (part['image_url'] != null) {
+            return {
+              'type': 'image_url',
+              'image_url': {'url': part['image_url']}
+            };
+          }
+          return {};
+        }).toList(),
+      }
+    ];
+  }
+
   @override
   Future<String> chat({
     required String prompt,
+    required String model,
+  }) async {
+    return chatWithContent(
+      content: [
+        {'text': prompt}
+      ],
+      model: model,
+    );
+  }
+
+  @override
+  Stream<String> chatStream({
+    required String prompt,
+    required String model,
+  }) async* {
+    yield* chatStreamWithContent(
+      content: [
+        {'text': prompt}
+      ],
+      model: model,
+    );
+  }
+
+  @override
+  Future<String> chatWithContent({
+    required List<Map<String, dynamic>> content,
     required String model,
   }) async {
     final base = _normalizeBase(apiUrl);
@@ -35,9 +81,7 @@ class OpenAIProvider implements LLMProvider {
       },
       body: jsonEncode({
         'model': model,
-        'messages': [
-          {'role': 'user', 'content': Uri.encodeComponent(prompt)},
-        ],
+        'messages': _buildMessages(content),
       }),
     );
 
@@ -53,8 +97,8 @@ class OpenAIProvider implements LLMProvider {
   }
 
   @override
-  Stream<String> chatStream({
-    required String prompt,
+  Stream<String> chatStreamWithContent({
+    required List<Map<String, dynamic>> content,
     required String model,
   }) async* {
     final base = _normalizeBase(apiUrl);
@@ -69,9 +113,7 @@ class OpenAIProvider implements LLMProvider {
       req.write(jsonEncode({
         'model': model,
         'stream': true,
-        'messages': [
-          {'role': 'user', 'content': Uri.encodeComponent(prompt)},
-        ],
+        'messages': _buildMessages(content),
       }));
 
       final res = await req.close();
@@ -81,7 +123,6 @@ class OpenAIProvider implements LLMProvider {
         throw Exception('OpenAI stream error ${res.statusCode}: $body');
       }
 
-      // SSE: data: {json}\n\n ... data: [DONE]
       await for (final line
           in res.transform(utf8.decoder).transform(const LineSplitter())) {
         if (!line.startsWith('data:')) continue;

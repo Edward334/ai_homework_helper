@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:ai_homework_helper/ui/result/result_page.dart';
 
 class LoadingPage extends StatefulWidget {
-  const LoadingPage({super.key});
+  final String filePath; // 新增：文件路径
+  const LoadingPage({super.key, required this.filePath});
 
   @override
   State<LoadingPage> createState() => _LoadingPageState();
@@ -38,7 +39,7 @@ class _LoadingPageState extends State<LoadingPage> with SingleTickerProviderStat
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => const ResultPage(),
+            builder: (_) => ResultPage(filePath: widget.filePath),
           ),
         );
       }
@@ -78,7 +79,7 @@ class _LoadingPageState extends State<LoadingPage> with SingleTickerProviderStat
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.blue.shade200.withOpacity(0.6),
+                          color: Colors.blue.shade200.withAlpha((255 * 0.6).round()),
                           spreadRadius: 5,
                           blurRadius: 15,
                           offset: const Offset(0, 5),

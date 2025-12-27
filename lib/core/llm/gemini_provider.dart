@@ -11,27 +11,21 @@ class GeminiProvider implements LLMProvider {
   GeminiProvider({required this.apiKey});
 
   Uri _generateContentUri(String model) {
-    // generateContent 端点见官方文档 :contentReference[oaicite:2]{index=2}
     return Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
     );
   }
 
   Uri _streamGenerateContentUri(String model) {
-    // streamGenerateContent + alt=sse 见官方文档 :contentReference[oaicite:3]{index=3}
     return Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey',
     );
   }
 
-  Map<String, dynamic> _body(String prompt) {
+  Map<String, dynamic> _body(List<Map<String, dynamic>> content) {
     return {
       'contents': [
-        {
-          'parts': [
-            {'text': prompt}
-          ]
-        }
+        {'parts': content}
       ]
     };
   }
@@ -53,6 +47,32 @@ class GeminiProvider implements LLMProvider {
     required String prompt,
     required String model,
   }) async {
+    return chatWithContent(
+      content: [
+        {'text': prompt}
+      ],
+      model: model,
+    );
+  }
+
+  @override
+  Stream<String> chatStream({
+    required String prompt,
+    required String model,
+  }) async* {
+    yield* chatStreamWithContent(
+      content: [
+        {'text': prompt}
+      ],
+      model: model,
+    );
+  }
+
+  @override
+  Future<String> chatWithContent({
+    required List<Map<String, dynamic>> content,
+    required String model,
+  }) async {
     final uri = _generateContentUri(model);
 
     final res = await http.post(
@@ -60,7 +80,7 @@ class GeminiProvider implements LLMProvider {
       headers: {
         HttpHeaders.contentTypeHeader: 'application/json',
       },
-      body: jsonEncode(_body(prompt)),
+      body: jsonEncode(_body(content)),
     );
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -72,8 +92,8 @@ class GeminiProvider implements LLMProvider {
   }
 
   @override
-  Stream<String> chatStream({
-    required String prompt,
+  Stream<String> chatStreamWithContent({
+    required List<Map<String, dynamic>> content,
     required String model,
   }) async* {
     final uri = _streamGenerateContentUri(model);
@@ -83,7 +103,7 @@ class GeminiProvider implements LLMProvider {
       final req = await client.postUrl(uri);
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
 
-      req.write(jsonEncode(_body(prompt)));
+      req.write(jsonEncode(_body(content)));
 
       final res = await req.close();
 
@@ -92,7 +112,6 @@ class GeminiProvider implements LLMProvider {
         throw Exception('Gemini stream error ${res.statusCode}: $body');
       }
 
-      // SSE: data: {GenerateContentResponse JSON}\n\n
       await for (final line
           in res.transform(utf8.decoder).transform(const LineSplitter())) {
         if (!line.startsWith('data:')) continue;

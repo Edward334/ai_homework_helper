@@ -14,7 +14,7 @@ class AppPaths {
     final file = File('${dir.path}/channels.json');
 
     // 🔍 调试用（可留可删）
-    print('📁 Channel JSON path: ${file.path}');
+    // print('📁 Channel JSON path: ${file.path}');
 
     return file;
   }
