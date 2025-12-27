@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart'; // 导入 file_picker
+import 'package:image_picker/image_picker.dart'; // 导入 image_picker
 import '../result/result_page.dart';
 import '../settings/settings_page.dart';
 
@@ -69,18 +70,32 @@ class HomePage extends StatelessWidget {
               icon: Icons.camera_alt,
               title: '拍照搜题',
               onTap: () async {
-                // 模拟拍照，实际应用中需要集成相机功能
-                // 这里为了演示，我将使用一个本地的图片文件路径作为示例
-                // 请替换为实际的图片路径，或者实现相机拍照功能
-                const String dummyImagePath = '/path/to/your/image.png'; // TODO: 替换为实际图片路径
+                final ImagePicker picker = ImagePicker();
+                try {
+                  final XFile? image = await picker.pickImage(source: ImageSource.camera);
 
-                if (!context.mounted) return;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ResultPage(filePath: dummyImagePath),
-                  ),
-                );
+                  if (image != null) {
+                    if (!context.mounted) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ResultPage(filePath: image.path),
+                      ),
+                    );
+                  } else {
+                    // 用户取消了拍照
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('未拍照')),
+                    );
+                  }
+                } catch (e) {
+                  // 处理相机不可用或权限问题
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('无法启动相机: $e')),
+                  );
+                }
               },
             ),
             const SizedBox(width: 24),

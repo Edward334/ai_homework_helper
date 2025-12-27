@@ -1,7 +1,12 @@
 
 
+import 'dart:ui' as ui;
+import 'dart:typed_data'; // 导入 Uint8List
+import 'dart:convert'; // 导入 base64Encode
+
 import 'package:ai_homework_helper/core/llm/llm_provider.dart';
 import 'package:ai_homework_helper/core/recognition/image_to_base64.dart';
+import 'package:pdf_render/pdf_render.dart';
 
 class QuestionRecognizer {
   final LLMProvider llmProvider;
@@ -44,18 +49,42 @@ class QuestionRecognizer {
   }
 
   Future<String> recognizeQuestionFromPdf(String pdfPath) async {
-    // For PDF, we'll need to convert each page to an image first.
-    // This is a placeholder. A real implementation would involve a PDF rendering library.
-    // For now, we'll treat PDF as an image for simplicity, assuming the first page is enough
-    // or that the LLM can handle a multi-image input if we convert all pages.
-    // Given the current LLMProvider only takes one image_url per content part,
-    // we'll assume a single image for now.
-    // A more robust solution would involve:
-    // 1. PDF to image conversion (e.g., using `pdf_render` or a native solution).
-    // 2. Iterating through pages, converting each to an image.
-    // 3. Sending multiple images to the LLM if supported, or processing each image separately.
+    try {
+      final doc = await PdfDocument.openFile(pdfPath);
+      final List<Map<String, dynamic>> content = [
+        {'text': _prompt},
+      ];
 
-    // Placeholder: For now, we'll just throw an unimplemented error.
-    throw UnimplementedError('PDF recognition is not yet implemented.');
+      for (var i = 0; i < doc.pageCount; i++) {
+        final page = await doc.getPage(i + 1); // 页码从 1 开始
+        final PdfPageImage pageImage = await page.render();
+        // if (pageImage == null) { // 已知 pageImage 不会为 null
+        //   continue; // 跳过无法渲染的页面
+        // }
+
+        final ui.Image image = await pageImage.createImageDetached();
+        final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (byteData == null) {
+          continue; // 跳过无法转换为字节数据的图像
+        }
+        final List<int> imageBytes = byteData.buffer.asUint8List();
+        final String base64Image = 'data:image/png;base64,${base64Encode(imageBytes)}';
+
+        content.add({
+          'image_url': base64Image,
+        });
+      }
+
+      if (content.length == 1) { // 只有提示，没有图片
+        throw Exception('PDF 中没有可识别的图像');
+      }
+
+      return await llmProvider.chatWithContent(
+        content: content,
+        model: model,
+      );
+    } catch (e) {
+      throw Exception('PDF 识别失败: $e');
+    }
   }
 }
