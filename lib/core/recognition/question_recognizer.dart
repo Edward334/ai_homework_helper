@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:ai_homework_helper/core/llm/llm_provider.dart';
 import 'package:ai_homework_helper/core/recognition/image_to_base64.dart';
-import 'package:pdfx/pdfx.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 class QuestionRecognizer {
   final LLMProvider llmProvider;
@@ -49,32 +49,30 @@ class QuestionRecognizer {
 
   Future<String> recognizeQuestionFromPdf(String pdfPath) async {
     try {
-      final PdfDocument pdfDocument = await PdfDocument.openFile(pdfPath);
+            final PdfDocument pdfDocument = await PdfDocument.openFile(pdfPath);
       final List<Map<String, dynamic>> content = [
         {'text': _prompt},
       ];
 
-      for (var i = 1; i <= pdfDocument.pagesCount; i++) {
-        final PdfPage page = await pdfDocument.getPage(i);
-        final PdfPageImage? pageImage = await page.render(
-          width: page.width,
-          height: page.height,
-          format: PdfPageImageFormat.png,
+      for (var i = 0; i < pdfDocument.pages.length; i++) {
+                final PdfPage page = pdfDocument.pages[i];
+        final PdfImage? pageImage = await page.render(
+          width: 1024, // Render at a fixed width to optimize image size for LLM
         );
 
         if (pageImage == null) {
           continue; // 跳过无法渲染的页面
         }
 
-        final Uint8List imageBytes = pageImage.bytes;
+        final Uint8List imageBytes = pageImage.pixels;
         final String base64Image = 'data:image/png;base64,${base64Encode(imageBytes)}';
 
         content.add({
           'image_url': base64Image,
         });
-        await page.close(); // 关闭页面以释放资源
+        
       }
-      await pdfDocument.close(); // 关闭文档以释放资源
+      
 
       if (content.length == 1) { // 只有提示，没有图片
         throw Exception('PDF 中没有可识别的图像');

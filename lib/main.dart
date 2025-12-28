@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:pdfrx/pdfrx.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'core/channel/channel_store.dart';
 import 'core/channel/channel_scope.dart';
@@ -8,6 +10,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final store = await ChannelStore.load();
+
+  final dir = await getTemporaryDirectory();
+  Pdfrx.getCacheDirectory = () => dir.path;
 
   runApp(MyApp(store: store));
 }

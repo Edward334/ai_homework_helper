@@ -47,12 +47,6 @@ class _ResultPageState extends State<ResultPage> {
   @override
   void initState() {
     super.initState();
-
-    questions = [
-      QuestionItem(title: '解方程：x² + 3x + 2 = 0'),
-      QuestionItem(title: '求函数的最值'),
-      QuestionItem(title: '证明题示例'),
-    ];
   }
 
   @override
@@ -203,6 +197,19 @@ class _ResultPageState extends State<ResultPage> {
 
   // ================= 内容区域 =================
   Widget _buildContent() {
+    if (questions.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('正在识别题目…'),
+          ],
+        ),
+      );
+    }
+
     final q = questions[selectedIndex];
 
     // 还没收到任何 chunk 时，显示 loading 占位
