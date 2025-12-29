@@ -100,6 +100,16 @@ class _ChannelEditPageState extends State<ChannelEditPage> {
             onChanged: (v) => channel.apiKey = v,
           ),
 
+          const SizedBox(height: 16),
+
+          SwitchListTile(
+            title: const Text('思考模型 (过滤 <think> 标签)'),
+            value: channel.isThinkingModel,
+            onChanged: (v) {
+              setState(() => channel.isThinkingModel = v);
+            },
+          ),
+
           const Divider(height: 32),
 
           const Text(

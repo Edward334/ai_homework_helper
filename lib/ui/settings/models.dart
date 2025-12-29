@@ -11,6 +11,7 @@ class ChannelConfig {
   List<String> models;
   String selectedModel;
   bool isDefault;
+  bool isThinkingModel;
 
   ChannelConfig({
     required this.name,
@@ -20,6 +21,7 @@ class ChannelConfig {
     required this.models,
     required this.selectedModel,
     this.isDefault = false,
+    this.isThinkingModel = false,
   });
 
   // ===== JSON =====
@@ -34,6 +36,7 @@ class ChannelConfig {
       models: List<String>.from(json['models']),
       selectedModel: json['selectedModel'],
       isDefault: json['isDefault'] ?? false,
+      isThinkingModel: json['isThinkingModel'] ?? false,
     );
   }
 
@@ -46,6 +49,7 @@ class ChannelConfig {
       'models': models,
       'selectedModel': selectedModel,
       'isDefault': isDefault,
+      'isThinkingModel': isThinkingModel,
     };
   }
 }

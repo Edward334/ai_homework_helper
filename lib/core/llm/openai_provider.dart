@@ -43,12 +43,14 @@ class OpenAIProvider implements LLMProvider {
   Future<String> chat({
     required String prompt,
     required String model,
+    bool isThinkingModel = false,
   }) async {
     return chatWithContent(
       content: [
         {'text': prompt}
       ],
       model: model,
+      isThinkingModel: isThinkingModel,
     );
   }
 
@@ -56,12 +58,14 @@ class OpenAIProvider implements LLMProvider {
   Stream<String> chatStream({
     required String prompt,
     required String model,
+    bool isThinkingModel = false,
   }) async* {
     yield* chatStreamWithContent(
       content: [
         {'text': prompt}
       ],
       model: model,
+      isThinkingModel: isThinkingModel,
     );
   }
 
@@ -69,6 +73,7 @@ class OpenAIProvider implements LLMProvider {
   Future<String> chatWithContent({
     required List<Map<String, dynamic>> content,
     required String model,
+    bool isThinkingModel = false,
   }) async {
     final base = _normalizeBase(apiUrl);
     final uri = Uri.parse('$base/chat/completions');
@@ -93,13 +98,19 @@ class OpenAIProvider implements LLMProvider {
     final choices = (data['choices'] as List?) ?? const [];
     if (choices.isEmpty) return '';
     final msg = choices[0]['message'] as Map<String, dynamic>?;
-    return (msg?['content'] as String?) ?? '';
+    String responseContent = (msg?['content'] as String?) ?? '';
+
+    if (isThinkingModel) {
+      responseContent = responseContent.replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '');
+    }
+    return responseContent;
   }
 
   @override
   Stream<String> chatStreamWithContent({
     required List<Map<String, dynamic>> content,
     required String model,
+    bool isThinkingModel = false,
   }) async* {
     final base = _normalizeBase(apiUrl);
     final uri = Uri.parse('$base/chat/completions');
@@ -142,8 +153,11 @@ class OpenAIProvider implements LLMProvider {
         if (choices.isEmpty) continue;
 
         final delta = choices[0]['delta'] as Map<String, dynamic>?;
-        final content = delta?['content'];
+        String? content = delta?['content'];
         if (content is String && content.isNotEmpty) {
+          if (isThinkingModel) {
+            content = content.replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '');
+          }
           yield content;
         }
       }

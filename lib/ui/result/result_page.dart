@@ -62,6 +62,7 @@ class _ResultPageState extends State<ResultPage> {
     _questionRecognizer = QuestionRecognizer( // 初始化 QuestionRecognizer
       llmProvider: LLMClient.fromChannel(_currentChannel),
       model: _currentChannel.selectedModel,
+      isThinkingModel: _currentChannel.isThinkingModel,
     );
 
     _recognizeAndLoadAnswers(); // 调用新的识别方法
@@ -76,6 +77,7 @@ class _ResultPageState extends State<ResultPage> {
       } else {
         recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(widget.filePath);
       }
+      print('Raw recognizedJson: $recognizedJson'); // Add this line for debugging
 
       final Map<String, dynamic> data = jsonDecode(recognizedJson);
       final List<dynamic> questionList = data['questions'] ?? [];

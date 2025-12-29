@@ -46,12 +46,14 @@ class GeminiProvider implements LLMProvider {
   Future<String> chat({
     required String prompt,
     required String model,
+    bool isThinkingModel = false,
   }) async {
     return chatWithContent(
       content: [
         {'text': prompt}
       ],
       model: model,
+      isThinkingModel: isThinkingModel,
     );
   }
 
@@ -59,12 +61,14 @@ class GeminiProvider implements LLMProvider {
   Stream<String> chatStream({
     required String prompt,
     required String model,
+    bool isThinkingModel = false,
   }) async* {
     yield* chatStreamWithContent(
       content: [
         {'text': prompt}
       ],
       model: model,
+      isThinkingModel: isThinkingModel,
     );
   }
 
@@ -72,6 +76,7 @@ class GeminiProvider implements LLMProvider {
   Future<String> chatWithContent({
     required List<Map<String, dynamic>> content,
     required String model,
+    bool isThinkingModel = false,
   }) async {
     final uri = _generateContentUri(model);
 
@@ -88,13 +93,19 @@ class GeminiProvider implements LLMProvider {
     }
 
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return _extractTextFromResponse(data);
+    String responseContent = _extractTextFromResponse(data);
+
+    if (isThinkingModel) {
+      responseContent = responseContent.replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '');
+    }
+    return responseContent;
   }
 
   @override
   Stream<String> chatStreamWithContent({
     required List<Map<String, dynamic>> content,
     required String model,
+    bool isThinkingModel = false,
   }) async* {
     final uri = _streamGenerateContentUri(model);
 
@@ -126,8 +137,11 @@ class GeminiProvider implements LLMProvider {
           continue;
         }
 
-        final text = _extractTextFromResponse(obj);
+        String text = _extractTextFromResponse(obj);
         if (text.isNotEmpty) {
+          if (isThinkingModel) {
+            text = text.replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '');
+          }
           yield text;
         }
       }
