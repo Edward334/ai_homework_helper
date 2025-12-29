@@ -43,6 +43,7 @@ dependencies:
   path: ^1.8.3
   image_picker: ^1.0.7
   pdfrx: ^2.2.18
+  image: ^4.1.7
 
 dev_dependencies:
   flutter_test:
