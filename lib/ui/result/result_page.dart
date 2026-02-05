@@ -44,6 +44,94 @@ class _ResultPageState extends State<ResultPage> {
   late ChannelConfig _currentChannel;
   late QuestionRecognizer _questionRecognizer; // 新增：QuestionRecognizer
 
+  String _sanitizeAiJson(String raw) {
+    final trimmed = raw.trim();
+    final fenceMatch = RegExp(r'```(?:json)?\s*([\s\S]*?)\s*```', caseSensitive: false)
+        .firstMatch(trimmed);
+    if (fenceMatch != null && fenceMatch.groupCount >= 1) {
+      return fenceMatch.group(1)!.trim();
+    }
+    return trimmed;
+  }
+
+  String _extractJsonPayload(String input) {
+    final startObj = input.indexOf('{');
+    final startArr = input.indexOf('[');
+    int start;
+    if (startObj == -1 && startArr == -1) return input;
+    if (startObj == -1) {
+      start = startArr;
+    } else if (startArr == -1) {
+      start = startObj;
+    } else {
+      start = startObj < startArr ? startObj : startArr;
+    }
+
+    int depth = 0;
+    bool inString = false;
+    bool escape = false;
+    for (int i = start; i < input.length; i++) {
+      final ch = input[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch == '\\') {
+        if (inString) {
+          escape = true;
+        }
+        continue;
+      }
+      if (ch == '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (ch == '{' || ch == '[') depth++;
+      if (ch == '}' || ch == ']') {
+        depth--;
+        if (depth == 0) {
+          return input.substring(start, i + 1);
+        }
+      }
+    }
+    return input;
+  }
+
+  String _escapeNewlinesInJsonStrings(String input) {
+    final buffer = StringBuffer();
+    bool inString = false;
+    bool escape = false;
+    for (int i = 0; i < input.length; i++) {
+      final ch = input[i];
+      if (escape) {
+        buffer.write(ch);
+        escape = false;
+        continue;
+      }
+      if (ch == '\\') {
+        buffer.write(ch);
+        if (inString) escape = true;
+        continue;
+      }
+      if (ch == '"') {
+        inString = !inString;
+        buffer.write(ch);
+        continue;
+      }
+      if (inString && (ch == '\n' || ch == '\r')) {
+        if (ch == '\r' && i + 1 < input.length && input[i + 1] == '\n') {
+          i++;
+        }
+        buffer.write('\\n');
+        continue;
+      }
+      buffer.write(ch);
+    }
+    return buffer.toString();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -79,7 +167,10 @@ class _ResultPageState extends State<ResultPage> {
       }
       print('Raw recognizedJson: $recognizedJson'); // Add this line for debugging
 
-      final Map<String, dynamic> data = jsonDecode(recognizedJson);
+      String sanitizedJson = _sanitizeAiJson(recognizedJson);
+      sanitizedJson = _extractJsonPayload(sanitizedJson);
+      sanitizedJson = _escapeNewlinesInJsonStrings(sanitizedJson);
+      final Map<String, dynamic> data = jsonDecode(sanitizedJson);
       final List<dynamic> questionList = data['questions'] ?? [];
 
       if (!mounted) return;
