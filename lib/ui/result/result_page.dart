@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
@@ -563,17 +564,17 @@ class _ResultPageState extends State<ResultPage> {
       ),
     );
     final baseStyle = pw.TextStyle(
-      fontSize: 10.5,
+      fontSize: 9.5,
       font: selectedFont,
       fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
-      lineSpacing: 1.2,
+      lineSpacing: 1.1,
     );
     final sectionTitle = pw.TextStyle(
-      fontSize: 12,
+      fontSize: 10.5,
       fontWeight: pw.FontWeight.bold,
       font: selectedFont,
       fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
-      lineSpacing: 1.2,
+      lineSpacing: 1.1,
     );
     final shouldShowQuestion = _exportIncludeQuestion;
     final shouldShowAnswer = _exportIncludeAnswer;
@@ -582,32 +583,56 @@ class _ResultPageState extends State<ResultPage> {
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+        margin: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 28),
         build: (context) {
           return [
-            pw.Text('搜题结果', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-            pw.SizedBox(height: 12),
+            pw.Text('搜题结果', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, font: selectedFont)),
+            pw.SizedBox(height: 8),
             ...List.generate(questions.length, (index) {
               final q = questions[index];
               final blocks = <pw.Widget>[];
-              blocks.add(pw.Text('第 ${index + 1} 题', style: sectionTitle));
+              blocks.add(
+                pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColor.fromInt(0xFFEFF2F5),
+                        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+                      ),
+                      child: pw.Text('第 ${index + 1} 题', style: sectionTitle),
+                    ),
+                  ],
+                ),
+              );
+              blocks.add(pw.SizedBox(height: 6));
               if (shouldShowQuestion) {
                 blocks.add(pw.Text('题目：${q.title}', style: baseStyle));
               }
               if (shouldShowAnswer) {
+                blocks.add(pw.SizedBox(height: 4));
                 blocks.add(pw.Text('答案：', style: baseStyle));
                 blocks.add(pw.Text(q.answer.isNotEmpty ? q.answer : '暂无答案', style: baseStyle));
               }
               if (shouldShowExplanation) {
+                blocks.add(pw.SizedBox(height: 4));
                 blocks.add(pw.Text('解析：', style: baseStyle));
                 blocks.add(pw.Text(q.explanation.isNotEmpty ? q.explanation : '暂无解析', style: baseStyle));
               }
-              blocks.add(pw.SizedBox(height: 12));
-              blocks.add(pw.Divider());
-              blocks.add(pw.SizedBox(height: 12));
-              return pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: blocks,
+
+              return pw.Container(
+                margin: const pw.EdgeInsets.only(bottom: 8),
+                padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: pw.BoxDecoration(
+                  color: PdfColor.fromInt(0xFFF8F9FB),
+                  border: pw.Border.all(color: PdfColor.fromInt(0xFFE1E6EB), width: 0.6),
+                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: blocks,
+                ),
               );
             }),
           ];
@@ -618,12 +643,19 @@ class _ResultPageState extends State<ResultPage> {
     final bytes = await doc.save();
     if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       await Printing.sharePdf(bytes: bytes, filename: '搜题结果.pdf');
-    } else {
-      await Printing.layoutPdf(
-        onLayout: (format) async => bytes,
-        name: '搜题结果.pdf',
-      );
+      return;
     }
+
+    final savePath = await FilePicker.platform.saveFile(
+      dialogTitle: '保存搜题结果',
+      fileName: '搜题结果.pdf',
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+    );
+    if (savePath == null) return;
+
+    final file = File(savePath);
+    await file.writeAsBytes(bytes, flush: true);
   }
 
   Future<pw.Font?> _loadBundledFont() async {
