@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart'; // 导入 file_picker
 import 'package:image_picker/image_picker.dart'; // 导入 image_picker
 import '../result/result_page.dart';
 import '../settings/settings_page.dart';
+import '../history/history_page.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -48,6 +49,18 @@ class HomePage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('作业帮'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: '历史记录',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const HistoryPage(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: '设置',

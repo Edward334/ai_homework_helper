@@ -7,6 +7,10 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+
+import '../../core/history/history_models.dart';
+import '../../core/history/history_store.dart';
 
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
@@ -35,9 +39,12 @@ class QuestionItem {
 }
 
 class ResultPage extends StatefulWidget {
-  final String filePath; // 新增：文件路径
+  final String? filePath; // 新增：文件路径
+  final HistoryRecord? historyRecord;
 
-  const ResultPage({super.key, required this.filePath}); // 修改构造函数
+  const ResultPage({super.key, required this.filePath}) : historyRecord = null; // 修改构造函数
+
+  const ResultPage.fromHistory({super.key, required this.historyRecord}) : filePath = null;
 
   @override
   State<ResultPage> createState() => _ResultPageState();
@@ -50,6 +57,7 @@ class _ResultPageState extends State<ResultPage> {
   bool _exportIncludeQuestion = true;
   bool _exportIncludeAnswer = true;
   bool _exportIncludeExplanation = true;
+  bool _savedToHistory = false;
 
   bool _started = false;
   late ChannelConfig _currentChannel;
@@ -219,6 +227,18 @@ class _ResultPageState extends State<ResultPage> {
   @override
   void initState() {
     super.initState();
+    if (widget.historyRecord != null) {
+      questions = widget.historyRecord!.questions
+          .map((q) => QuestionItem(
+                title: q.question,
+                answer: q.answer,
+                explanation: q.explanation,
+                status: QuestionStatus.done,
+              ))
+          .toList();
+      _savedToHistory = true;
+      _started = true;
+    }
   }
 
   @override
@@ -244,10 +264,14 @@ class _ResultPageState extends State<ResultPage> {
     try {
       String recognizedJson;
       // 根据文件类型调用不同的识别方法
-      if (widget.filePath.endsWith('.pdf')) {
-        recognizedJson = await _questionRecognizer.recognizeQuestionFromPdf(widget.filePath);
+      final filePath = widget.filePath;
+      if (filePath == null) {
+        throw Exception('文件路径为空');
+      }
+      if (filePath.endsWith('.pdf')) {
+        recognizedJson = await _questionRecognizer.recognizeQuestionFromPdf(filePath);
       } else {
-        recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(widget.filePath);
+        recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(filePath);
       }
       print('Raw recognizedJson: $recognizedJson'); // Add this line for debugging
 
@@ -274,6 +298,8 @@ class _ResultPageState extends State<ResultPage> {
           );
         }).toList();
       });
+
+      await _saveHistoryOnce();
 
       _loadAnswersStream(); // 继续加载答案流
     } catch (e) {
@@ -467,6 +493,28 @@ class _ResultPageState extends State<ResultPage> {
       case QuestionStatus.error:
         return Icon(Icons.error, color: Colors.red, size: size);
     }
+  }
+
+  Future<void> _saveHistoryOnce() async {
+    if (_savedToHistory) return;
+    if (widget.filePath == null || questions.isEmpty) return;
+
+    final now = DateTime.now();
+    final record = HistoryRecord(
+      id: now.microsecondsSinceEpoch.toString(),
+      createdAt: now,
+      sourcePath: widget.filePath!,
+      sourceName: p.basename(widget.filePath!),
+      questions: questions
+          .map((q) => HistoryQuestion(
+                question: q.title,
+                answer: q.answer,
+                explanation: q.explanation,
+              ))
+          .toList(),
+    );
+    await HistoryStore.add(record);
+    _savedToHistory = true;
   }
 
   Future<void> _showExportDialog() async {
