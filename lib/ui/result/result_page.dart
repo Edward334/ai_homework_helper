@@ -1,5 +1,11 @@
 import 'dart:convert'; // 用于 JSON 解析
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
@@ -39,6 +45,10 @@ class ResultPage extends StatefulWidget {
 class _ResultPageState extends State<ResultPage> {
   int selectedIndex = 0;
   List<QuestionItem> questions = []; // 初始化为空列表
+
+  bool _exportIncludeQuestion = true;
+  bool _exportIncludeAnswer = true;
+  bool _exportIncludeExplanation = true;
 
   bool _started = false;
   late ChannelConfig _currentChannel;
@@ -132,6 +142,79 @@ class _ResultPageState extends State<ResultPage> {
     return buffer.toString();
   }
 
+  String _stripTrailingCommas(String input) {
+    return input.replaceAll(RegExp(r',\s*(\}|\])'), r'$1');
+  }
+
+  String _repairUnescapedQuotesInJsonStrings(String input) {
+    final buffer = StringBuffer();
+    bool inString = false;
+    bool escape = false;
+
+    int i = 0;
+    while (i < input.length) {
+      final ch = input[i];
+
+      if (escape) {
+        buffer.write(ch);
+        escape = false;
+        i++;
+        continue;
+      }
+
+      if (ch == '\\') {
+        buffer.write(ch);
+        if (inString) {
+          escape = true;
+        }
+        i++;
+        continue;
+      }
+
+      if (ch == '"') {
+        if (!inString) {
+          inString = true;
+          buffer.write(ch);
+          i++;
+          continue;
+        }
+
+        // If this quote looks like it ends the string (next non-space is , } ]),
+        // keep it. Otherwise, escape it to avoid unterminated strings.
+        int j = i + 1;
+        while (j < input.length && (input[j] == ' ' || input[j] == '\t' || input[j] == '\r' || input[j] == '\n')) {
+          j++;
+        }
+        if (j >= input.length || input[j] == ',' || input[j] == '}' || input[j] == ']') {
+          inString = false;
+          buffer.write(ch);
+        } else {
+          buffer.write(r'\"');
+        }
+        i++;
+        continue;
+      }
+
+      if (inString && (ch == '\n' || ch == '\r')) {
+        if (ch == '\r' && i + 1 < input.length && input[i + 1] == '\n') {
+          i++;
+        }
+        buffer.write(r'\n');
+        i++;
+        continue;
+      }
+
+      buffer.write(ch);
+      i++;
+    }
+
+    if (inString) {
+      buffer.write('"');
+    }
+
+    return buffer.toString();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -170,7 +253,14 @@ class _ResultPageState extends State<ResultPage> {
       String sanitizedJson = _sanitizeAiJson(recognizedJson);
       sanitizedJson = _extractJsonPayload(sanitizedJson);
       sanitizedJson = _escapeNewlinesInJsonStrings(sanitizedJson);
-      final Map<String, dynamic> data = jsonDecode(sanitizedJson);
+      sanitizedJson = _stripTrailingCommas(sanitizedJson);
+      Map<String, dynamic> data;
+      try {
+        data = jsonDecode(sanitizedJson);
+      } catch (_) {
+        final repaired = _repairUnescapedQuotesInJsonStrings(sanitizedJson);
+        data = jsonDecode(repaired);
+      }
       final List<dynamic> questionList = data['questions'] ?? [];
 
       if (!mounted) return;
@@ -213,7 +303,16 @@ class _ResultPageState extends State<ResultPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('搜题结果')),
+      appBar: AppBar(
+        title: const Text('搜题结果'),
+        actions: [
+          TextButton.icon(
+            onPressed: questions.isEmpty ? null : _showExportDialog,
+            icon: const Icon(Icons.picture_as_pdf),
+            label: const Text('导出 PDF'),
+          ),
+        ],
+      ),
       body: LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth > 700) {
@@ -366,6 +465,173 @@ class _ResultPageState extends State<ResultPage> {
         return Icon(Icons.check_circle, color: Colors.green, size: size);
       case QuestionStatus.error:
         return Icon(Icons.error, color: Colors.red, size: size);
+    }
+  }
+
+  Future<void> _showExportDialog() async {
+    final theme = Theme.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        bool includeQuestion = _exportIncludeQuestion;
+        bool includeAnswer = _exportIncludeAnswer;
+        bool includeExplanation = _exportIncludeExplanation;
+
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('导出选项'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text('字体：Noto Sans CJK SC（内置）'),
+                  ),
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: includeQuestion,
+                    title: const Text('带题目'),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setLocalState(() => includeQuestion = value);
+                    },
+                  ),
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: includeAnswer,
+                    title: const Text('带答案'),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setLocalState(() => includeAnswer = value);
+                    },
+                  ),
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: includeExplanation,
+                    title: const Text('带解析'),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setLocalState(() => includeExplanation = value);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('取消'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _exportIncludeQuestion = includeQuestion;
+                      _exportIncludeAnswer = includeAnswer;
+                      _exportIncludeExplanation = includeExplanation;
+                    });
+                    Navigator.of(context).pop();
+                    _exportPdf();
+                  },
+                  child: const Text('导出 PDF'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    final pw.Font? selectedFont = await _loadBundledFont();
+    if (selectedFont == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('字体文件缺失，请确认已放入 assets/fonts/')),
+      );
+      return;
+    }
+
+    final doc = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: selectedFont,
+        bold: selectedFont,
+        italic: selectedFont,
+        boldItalic: selectedFont,
+      ),
+    );
+    final baseStyle = pw.TextStyle(
+      fontSize: 10.5,
+      font: selectedFont,
+      fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
+      lineSpacing: 1.2,
+    );
+    final sectionTitle = pw.TextStyle(
+      fontSize: 12,
+      fontWeight: pw.FontWeight.bold,
+      font: selectedFont,
+      fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
+      lineSpacing: 1.2,
+    );
+    final shouldShowQuestion = _exportIncludeQuestion;
+    final shouldShowAnswer = _exportIncludeAnswer;
+    final shouldShowExplanation = _exportIncludeExplanation;
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+        build: (context) {
+          return [
+            pw.Text('搜题结果', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 12),
+            ...List.generate(questions.length, (index) {
+              final q = questions[index];
+              final blocks = <pw.Widget>[];
+              blocks.add(pw.Text('第 ${index + 1} 题', style: sectionTitle));
+              if (shouldShowQuestion) {
+                blocks.add(pw.Text('题目：${q.title}', style: baseStyle));
+              }
+              if (shouldShowAnswer) {
+                blocks.add(pw.Text('答案：', style: baseStyle));
+                blocks.add(pw.Text(q.answer.isNotEmpty ? q.answer : '暂无答案', style: baseStyle));
+              }
+              if (shouldShowExplanation) {
+                blocks.add(pw.Text('解析：', style: baseStyle));
+                blocks.add(pw.Text(q.explanation.isNotEmpty ? q.explanation : '暂无解析', style: baseStyle));
+              }
+              blocks.add(pw.SizedBox(height: 12));
+              blocks.add(pw.Divider());
+              blocks.add(pw.SizedBox(height: 12));
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: blocks,
+              );
+            }),
+          ];
+        },
+      ),
+    );
+
+    final bytes = await doc.save();
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      await Printing.sharePdf(bytes: bytes, filename: '搜题结果.pdf');
+    } else {
+      await Printing.layoutPdf(
+        onLayout: (format) async => bytes,
+        name: '搜题结果.pdf',
+      );
+    }
+  }
+
+  Future<pw.Font?> _loadBundledFont() async {
+    try {
+      final data = await rootBundle.load('assets/fonts/NotoSansSC-VariableFont_wght.ttf');
+      return pw.Font.ttf(data.buffer.asByteData());
+    } catch (_) {
+      return null;
     }
   }
 }
