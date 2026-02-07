@@ -614,14 +614,14 @@ class _ResultPageState extends State<ResultPage> {
     final baseStyle = pw.TextStyle(
       fontSize: 9.5,
       font: selectedFont,
-      fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
+      fontFallback: [selectedFont],
       lineSpacing: 1.1,
     );
     final sectionTitle = pw.TextStyle(
       fontSize: 10.5,
       fontWeight: pw.FontWeight.bold,
       font: selectedFont,
-      fontFallback: selectedFont == null ? const <pw.Font>[] : [selectedFont],
+      fontFallback: [selectedFont],
       lineSpacing: 1.1,
     );
     final shouldShowQuestion = _exportIncludeQuestion;

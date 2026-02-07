@@ -69,7 +69,7 @@ class QuestionRecognizer {
         }
 
         final Uint8List imageBytes = pageImage.pixels;
-        final img.Image? image = img.Image.fromBytes(
+        final img.Image image = img.Image.fromBytes(
           width: pageImage.width,
           height: pageImage.height,
           bytes: imageBytes.buffer,
