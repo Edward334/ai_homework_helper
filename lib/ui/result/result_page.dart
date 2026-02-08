@@ -1,4 +1,3 @@
-import 'dart:convert'; // 用于 JSON 解析
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
@@ -15,27 +14,17 @@ import '../../core/history/history_store.dart';
 import '../../core/channel/channel_scope.dart';
 import '../../core/llm/llm_client.dart';
 import '../../core/recognition/question_recognizer.dart'; // 导入 QuestionRecognizer
+import '../../core/settings/app_settings_scope.dart';
 import '../../ui/settings/models.dart';
 import '../common/markdown_view.dart';
+import 'ai_json.dart';
+import 'result_models.dart';
 
-enum QuestionStatus {
-  loading,
-  done,
-  error,
-}
+class _QuestionRef {
+  final int groupIndex;
+  final int questionIndex;
 
-class QuestionItem {
-  final String title;
-  QuestionStatus status;
-  String answer;
-  String explanation; // 新增：解析
-
-  QuestionItem({
-    required this.title,
-    this.status = QuestionStatus.loading,
-    this.answer = '',
-    this.explanation = '', // 初始化
-  });
+  const _QuestionRef(this.groupIndex, this.questionIndex);
 }
 
 class ResultPage extends StatefulWidget {
@@ -52,7 +41,12 @@ class ResultPage extends StatefulWidget {
 
 class _ResultPageState extends State<ResultPage> {
   int selectedIndex = 0;
-  List<QuestionItem> questions = []; // 初始化为空列表
+  List<QuestionGroup> groups = [];
+  List<_QuestionRef> _questionRefs = [];
+  bool _isProcessing = false;
+  String _loadingStage = '正在识别题目…';
+  int _progressCurrent = 0;
+  int _progressTotal = 0;
 
   bool _exportIncludeQuestion = true;
   bool _exportIncludeAnswer = true;
@@ -63,179 +57,42 @@ class _ResultPageState extends State<ResultPage> {
   late ChannelConfig _currentChannel;
   late QuestionRecognizer _questionRecognizer; // 新增：QuestionRecognizer
 
-  String _sanitizeAiJson(String raw) {
-    final trimmed = raw.trim();
-    final fenceMatch = RegExp(r'```(?:json)?\s*([\s\S]*?)\s*```', caseSensitive: false)
-        .firstMatch(trimmed);
-    if (fenceMatch != null && fenceMatch.groupCount >= 1) {
-      return fenceMatch.group(1)!.trim();
-    }
-    return trimmed;
+  void _setLoadingStage(String stage, {int current = 0, int total = 0}) {
+    if (!mounted) return;
+    setState(() {
+      _isProcessing = true;
+      _loadingStage = stage;
+      _progressCurrent = current;
+      _progressTotal = total;
+    });
   }
 
-  String _extractJsonPayload(String input) {
-    final startObj = input.indexOf('{');
-    final startArr = input.indexOf('[');
-    int start;
-    if (startObj == -1 && startArr == -1) return input;
-    if (startObj == -1) {
-      start = startArr;
-    } else if (startArr == -1) {
-      start = startObj;
-    } else {
-      start = startObj < startArr ? startObj : startArr;
-    }
-
-    int depth = 0;
-    bool inString = false;
-    bool escape = false;
-    for (int i = start; i < input.length; i++) {
-      final ch = input[i];
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (ch == '\\') {
-        if (inString) {
-          escape = true;
-        }
-        continue;
-      }
-      if (ch == '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-
-      if (ch == '{' || ch == '[') depth++;
-      if (ch == '}' || ch == ']') {
-        depth--;
-        if (depth == 0) {
-          return input.substring(start, i + 1);
-        }
-      }
-    }
-    return input;
+  void _finishProcessing() {
+    if (!mounted) return;
+    setState(() {
+      _isProcessing = false;
+    });
   }
 
-  String _escapeNewlinesInJsonStrings(String input) {
-    final buffer = StringBuffer();
-    bool inString = false;
-    bool escape = false;
-    for (int i = 0; i < input.length; i++) {
-      final ch = input[i];
-      if (escape) {
-        buffer.write(ch);
-        escape = false;
-        continue;
+  void _rebuildQuestionRefs() {
+    final refs = <_QuestionRef>[];
+    for (int g = 0; g < groups.length; g++) {
+      for (int q = 0; q < groups[g].questions.length; q++) {
+        refs.add(_QuestionRef(g, q));
       }
-      if (ch == '\\') {
-        buffer.write(ch);
-        if (inString) escape = true;
-        continue;
-      }
-      if (ch == '"') {
-        inString = !inString;
-        buffer.write(ch);
-        continue;
-      }
-      if (inString && (ch == '\n' || ch == '\r')) {
-        if (ch == '\r' && i + 1 < input.length && input[i + 1] == '\n') {
-          i++;
-        }
-        buffer.write('\\n');
-        continue;
-      }
-      buffer.write(ch);
     }
-    return buffer.toString();
-  }
-
-  String _stripTrailingCommas(String input) {
-    return input.replaceAll(RegExp(r',\s*(\}|\])'), r'$1');
-  }
-
-  String _repairUnescapedQuotesInJsonStrings(String input) {
-    final buffer = StringBuffer();
-    bool inString = false;
-    bool escape = false;
-
-    int i = 0;
-    while (i < input.length) {
-      final ch = input[i];
-
-      if (escape) {
-        buffer.write(ch);
-        escape = false;
-        i++;
-        continue;
-      }
-
-      if (ch == '\\') {
-        buffer.write(ch);
-        if (inString) {
-          escape = true;
-        }
-        i++;
-        continue;
-      }
-
-      if (ch == '"') {
-        if (!inString) {
-          inString = true;
-          buffer.write(ch);
-          i++;
-          continue;
-        }
-
-        // If this quote looks like it ends the string (next non-space is , } ]),
-        // keep it. Otherwise, escape it to avoid unterminated strings.
-        int j = i + 1;
-        while (j < input.length && (input[j] == ' ' || input[j] == '\t' || input[j] == '\r' || input[j] == '\n')) {
-          j++;
-        }
-        if (j >= input.length || input[j] == ',' || input[j] == '}' || input[j] == ']') {
-          inString = false;
-          buffer.write(ch);
-        } else {
-          buffer.write(r'\"');
-        }
-        i++;
-        continue;
-      }
-
-      if (inString && (ch == '\n' || ch == '\r')) {
-        if (ch == '\r' && i + 1 < input.length && input[i + 1] == '\n') {
-          i++;
-        }
-        buffer.write(r'\n');
-        i++;
-        continue;
-      }
-
-      buffer.write(ch);
-      i++;
+    _questionRefs = refs;
+    if (selectedIndex >= _questionRefs.length) {
+      selectedIndex = 0;
     }
-
-    if (inString) {
-      buffer.write('"');
-    }
-
-    return buffer.toString();
   }
 
   @override
   void initState() {
     super.initState();
     if (widget.historyRecord != null) {
-      questions = widget.historyRecord!.questions
-          .map((q) => QuestionItem(
-                title: q.question,
-                answer: q.answer,
-                explanation: q.explanation,
-                status: QuestionStatus.done,
-              ))
-          .toList();
+      groups = _buildGroupsFromHistory(widget.historyRecord!);
+      _rebuildQuestionRefs();
       _savedToHistory = true;
       _started = true;
     }
@@ -262,69 +119,95 @@ class _ResultPageState extends State<ResultPage> {
 
   Future<void> _recognizeAndLoadAnswers() async {
     try {
-      String recognizedJson;
       // 根据文件类型调用不同的识别方法
       final filePath = widget.filePath;
       if (filePath == null) {
         throw Exception('文件路径为空');
       }
+      final settings = AppSettingsScope.of(context).settings;
       if (filePath.endsWith('.pdf')) {
-        recognizedJson = await _questionRecognizer.recognizeQuestionFromPdf(filePath);
-      } else {
-        recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(filePath);
-      }
-      print('Raw recognizedJson: $recognizedJson'); // Add this line for debugging
-
-      String sanitizedJson = _sanitizeAiJson(recognizedJson);
-      sanitizedJson = _extractJsonPayload(sanitizedJson);
-      sanitizedJson = _escapeNewlinesInJsonStrings(sanitizedJson);
-      sanitizedJson = _stripTrailingCommas(sanitizedJson);
-      Map<String, dynamic> data;
-      try {
-        data = jsonDecode(sanitizedJson);
-      } catch (_) {
-        final repaired = _repairUnescapedQuotesInJsonStrings(sanitizedJson);
-        data = jsonDecode(repaired);
-      }
-      final List<dynamic> questionList = data['questions'] ?? [];
-
-      if (!mounted) return;
-      setState(() {
-        questions = questionList.map((item) {
-          return QuestionItem(
-            title: item['question'] ?? '未知题目',
-            answer: item['answer'] ?? '暂无答案',
-            explanation: item['explanation'] ?? '暂无解析',
+        final pageCount = await _questionRecognizer.getPdfPageCount(filePath);
+        if (settings.enableQuestionClassification) {
+          _setLoadingStage('正在进行题目分类…');
+          final classificationJson = await _questionRecognizer.classifyPdfQuestions(filePath);
+          final classifiedGroups = _parseClassificationGroups(
+            classificationJson,
+            pageCount,
           );
-        }).toList();
-      });
+          final groupsResult = await _recognizeGroupsFromPdf(
+            pdfPath: filePath,
+            groups: classifiedGroups,
+            maxConcurrent: settings.maxConcurrentTasks,
+          );
+          if (!mounted) return;
+          setState(() {
+            groups = groupsResult;
+            _rebuildQuestionRefs();
+          });
+        } else {
+          _setLoadingStage('正在识别题目…');
+          final recognizedJson = await _questionRecognizer.recognizeQuestionFromPdfPages(
+            pdfPath: filePath,
+            pages: List<int>.generate(pageCount, (i) => i + 1),
+            groupTitle: '题目',
+            subject: '',
+          );
+          final items = AiJsonHelper.parseQuestions(recognizedJson);
+          if (!mounted) return;
+          setState(() {
+            groups = [
+              QuestionGroup(
+                title: '题目',
+                subject: '',
+                pages: List<int>.generate(pageCount, (i) => i + 1),
+                questions: items,
+              ),
+            ];
+            _rebuildQuestionRefs();
+          });
+        }
+      } else {
+        _setLoadingStage('正在识别题目…');
+        final recognizedJson = await _questionRecognizer.recognizeQuestionFromImage(filePath);
+        final items = AiJsonHelper.parseQuestions(recognizedJson);
+        if (!mounted) return;
+        setState(() {
+          groups = [
+            QuestionGroup(
+              title: '题目',
+              subject: '',
+              pages: const [],
+              questions: items,
+            ),
+          ];
+          _rebuildQuestionRefs();
+        });
+      }
 
       await _saveHistoryOnce();
-
-      _loadAnswersStream(); // 继续加载答案流
+      _finishProcessing();
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        questions = [
-          QuestionItem(
+        groups = [
+          QuestionGroup(
             title: '识别失败',
-            status: QuestionStatus.error,
-            answer: '识别失败：$e',
-            explanation: '',
-          )
+            subject: '',
+            pages: const [],
+            questions: [
+              QuestionItem(
+                title: '识别失败',
+                status: QuestionStatus.error,
+                answer: '识别失败：$e',
+                explanation: '',
+              ),
+            ],
+          ),
         ];
+        _rebuildQuestionRefs();
       });
-      // print('识别失败：$e');
+      _finishProcessing();
     }
-  }
-
-  Future<void> _loadAnswersStream() async {
-    if (!mounted) return;
-    setState(() {
-      for (final q in questions) {
-        q.status = QuestionStatus.done; // 假设识别成功后，直接标记为完成
-      }
-    });
   }
 
   @override
@@ -334,7 +217,7 @@ class _ResultPageState extends State<ResultPage> {
         title: const Text('搜题结果'),
         actions: [
           TextButton.icon(
-            onPressed: questions.isEmpty ? null : _showExportDialog,
+            onPressed: _questionRefs.isEmpty ? null : _showExportDialog,
             icon: const Icon(Icons.picture_as_pdf),
             label: const Text('导出 PDF'),
           ),
@@ -360,19 +243,7 @@ class _ResultPageState extends State<ResultPage> {
           decoration: BoxDecoration(
             border: Border(right: BorderSide(color: Colors.grey.shade300)),
           ),
-          child: ListView.builder(
-            itemCount: questions.length,
-            itemBuilder: (context, index) {
-              final q = questions[index];
-              return ListTile(
-                selected: index == selectedIndex,
-                title: Text('第 ${index + 1} 题'),
-                subtitle: Text(q.title),
-                trailing: _statusIcon(q.status),
-                onTap: () => setState(() => selectedIndex = index),
-              );
-            },
-          ),
+          child: _buildNavigationList(dense: false),
         ),
         Expanded(child: _buildContent()),
       ],
@@ -384,29 +255,8 @@ class _ResultPageState extends State<ResultPage> {
     return Column(
       children: [
         SizedBox(
-          height: 64,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: questions.length,
-            itemBuilder: (context, index) {
-              final q = questions[index];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: ChoiceChip(
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('第 ${index + 1} 题'),
-                      const SizedBox(width: 4),
-                      _statusIcon(q.status, small: true),
-                    ],
-                  ),
-                  selected: index == selectedIndex,
-                  onSelected: (_) => setState(() => selectedIndex = index),
-                ),
-              );
-            },
-          ),
+          height: 180,
+          child: _buildNavigationList(dense: true),
         ),
         const Divider(height: 1),
         Expanded(child: _buildContent()),
@@ -414,22 +264,55 @@ class _ResultPageState extends State<ResultPage> {
     );
   }
 
-  // ================= 内容区域 =================
-  Widget _buildContent() {
-    if (questions.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('正在识别题目…'),
-          ],
+  Widget _buildNavigationList({required bool dense}) {
+    if (_questionRefs.isEmpty) {
+      return _buildLoadingStatus();
+    }
+    final items = <Widget>[];
+    int globalIndex = 0;
+    for (int g = 0; g < groups.length; g++) {
+      final group = groups[g];
+      items.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            group.displayTitle,
+            style: TextStyle(
+              fontSize: dense ? 13 : 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueGrey.shade700,
+            ),
+          ),
         ),
       );
+      for (int q = 0; q < group.questions.length; q++) {
+        final question = group.questions[q];
+        final currentIndex = globalIndex;
+        items.add(
+          ListTile(
+            dense: dense,
+            selected: currentIndex == selectedIndex,
+            title: Text('第 ${currentIndex + 1} 题'),
+            subtitle: Text(question.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+            trailing: _statusIcon(question.status, small: dense),
+            onTap: () => setState(() => selectedIndex = currentIndex),
+          ),
+        );
+        globalIndex++;
+      }
+    }
+    return ListView(children: items);
+  }
+
+  // ================= 内容区域 =================
+  Widget _buildContent() {
+    if (_questionRefs.isEmpty) {
+      return _buildLoadingStatus();
     }
 
-    final q = questions[selectedIndex];
+    final ref = _questionRefs[selectedIndex];
+    final group = groups[ref.groupIndex];
+    final q = group.questions[ref.questionIndex];
 
     // 还没收到任何 chunk 时，显示 loading 占位
     if (q.status == QuestionStatus.loading && q.answer.isEmpty) {
@@ -449,6 +332,11 @@ class _ResultPageState extends State<ResultPage> {
       padding: const EdgeInsets.all(16),
       child: ListView(
         children: [
+          Text(
+            group.displayTitle,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
+          ),
+          const SizedBox(height: 8),
           Text(
             '题目：${q.title}',
             style: const TextStyle(fontSize: 18),
@@ -477,6 +365,21 @@ class _ResultPageState extends State<ResultPage> {
     );
   }
 
+  Widget _buildLoadingStatus() {
+    final showProgress = _progressTotal > 0;
+    final progressText = showProgress ? ' ($_progressCurrent/$_progressTotal)' : '';
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text('$_loadingStage$progressText'),
+        ],
+      ),
+    );
+  }
+
   // ================= 状态图标 =================
   Widget _statusIcon(QuestionStatus status, {bool small = false}) {
     final size = small ? 16.0 : 20.0;
@@ -497,21 +400,28 @@ class _ResultPageState extends State<ResultPage> {
 
   Future<void> _saveHistoryOnce() async {
     if (_savedToHistory) return;
-    if (widget.filePath == null || questions.isEmpty) return;
+    if (widget.filePath == null || _questionRefs.isEmpty) return;
 
     final now = DateTime.now();
+    final historyQuestions = <HistoryQuestion>[];
+    for (final group in groups) {
+      for (final q in group.questions) {
+        historyQuestions.add(
+          HistoryQuestion(
+            question: q.title,
+            answer: q.answer,
+            explanation: q.explanation,
+            groupTitle: group.displayTitle,
+          ),
+        );
+      }
+    }
     final record = HistoryRecord(
       id: now.microsecondsSinceEpoch.toString(),
       createdAt: now,
       sourcePath: widget.filePath!,
       sourceName: p.basename(widget.filePath!),
-      questions: questions
-          .map((q) => HistoryQuestion(
-                question: q.title,
-                answer: q.answer,
-                explanation: q.explanation,
-              ))
-          .toList(),
+      questions: historyQuestions,
     );
     await HistoryStore.add(record);
     _savedToHistory = true;
@@ -633,11 +543,25 @@ class _ResultPageState extends State<ResultPage> {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 28),
         build: (context) {
-          return [
+          final content = <pw.Widget>[
             pw.Text('搜题结果', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, font: selectedFont)),
             pw.SizedBox(height: 8),
-            ...List.generate(questions.length, (index) {
-              final q = questions[index];
+          ];
+
+          int globalIndex = 0;
+          for (final group in groups) {
+            content.add(
+              pw.Container(
+                margin: const pw.EdgeInsets.only(top: 6, bottom: 6),
+                padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: pw.BoxDecoration(
+                  color: PdfColor.fromInt(0xFFEAF1F8),
+                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+                ),
+                child: pw.Text(group.displayTitle, style: sectionTitle),
+              ),
+            );
+            for (final q in group.questions) {
               final blocks = <pw.Widget>[];
               blocks.add(
                 pw.Row(
@@ -649,7 +573,7 @@ class _ResultPageState extends State<ResultPage> {
                         color: PdfColor.fromInt(0xFFEFF2F5),
                         borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
                       ),
-                      child: pw.Text('第 ${index + 1} 题', style: sectionTitle),
+                      child: pw.Text('第 ${globalIndex + 1} 题', style: sectionTitle),
                     ),
                   ],
                 ),
@@ -668,22 +592,25 @@ class _ResultPageState extends State<ResultPage> {
                 blocks.add(pw.Text('解析：', style: baseStyle));
                 blocks.add(pw.Text(q.explanation.isNotEmpty ? q.explanation : '暂无解析', style: baseStyle));
               }
-
-              return pw.Container(
-                margin: const pw.EdgeInsets.only(bottom: 8),
-                padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: pw.BoxDecoration(
-                  color: PdfColor.fromInt(0xFFF8F9FB),
-                  border: pw.Border.all(color: PdfColor.fromInt(0xFFE1E6EB), width: 0.6),
-                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-                ),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: blocks,
+              content.add(
+                pw.Container(
+                  margin: const pw.EdgeInsets.only(bottom: 8),
+                  padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: pw.BoxDecoration(
+                    color: PdfColor.fromInt(0xFFF8F9FB),
+                    border: pw.Border.all(color: PdfColor.fromInt(0xFFE1E6EB), width: 0.6),
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: blocks,
+                  ),
                 ),
               );
-            }),
-          ];
+              globalIndex++;
+            }
+          }
+          return content;
         },
       ),
     );
@@ -704,6 +631,192 @@ class _ResultPageState extends State<ResultPage> {
 
     final file = File(savePath);
     await file.writeAsBytes(bytes, flush: true);
+  }
+
+  List<QuestionGroup> _buildGroupsFromHistory(HistoryRecord record) {
+    final groupsMap = <String, QuestionGroup>{};
+    for (final q in record.questions) {
+      final title = q.groupTitle.trim().isEmpty ? '题目' : q.groupTitle.trim();
+      final group = groupsMap.putIfAbsent(
+        title,
+        () => QuestionGroup(
+          title: title,
+          subject: '',
+          pages: const [],
+          questions: [],
+        ),
+      );
+      group.questions.add(
+        QuestionItem(
+          title: q.question,
+          answer: q.answer,
+          explanation: q.explanation,
+          status: QuestionStatus.done,
+        ),
+      );
+    }
+    return groupsMap.values.toList();
+  }
+
+  List<QuestionGroup> _parseClassificationGroups(String raw, int pageCount) {
+    final data = AiJsonHelper.decodeObject(raw);
+    final List<dynamic> list = data['groups'] ?? [];
+    final groupsWithIndex = <MapEntry<int, QuestionGroup>>[];
+    final assignedPages = <int>{};
+
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final rawIndex = item['index'];
+      final index = rawIndex is int ? rawIndex : int.tryParse('$rawIndex') ?? 0;
+      final title = (item['title'] ?? '').toString().trim();
+      final subject = (item['subject'] ?? '').toString().trim();
+      final pagesRaw = item['pages'];
+      final pages = <int>[];
+      if (pagesRaw is List) {
+        for (final p in pagesRaw) {
+          final parsed = p is int ? p : int.tryParse('$p');
+          if (parsed != null && parsed >= 1 && parsed <= pageCount && !assignedPages.contains(parsed)) {
+            pages.add(parsed);
+            assignedPages.add(parsed);
+          }
+        }
+      }
+      if (pages.isEmpty) continue;
+      groupsWithIndex.add(
+        MapEntry(
+          index,
+        QuestionGroup(
+          title: title.isEmpty ? '第一大题：综合' : title,
+          subject: subject,
+          pages: pages,
+          questions: [],
+        ),
+        ),
+      );
+    }
+
+    final missingPages = <int>[];
+    for (int i = 1; i <= pageCount; i++) {
+      if (!assignedPages.contains(i)) {
+        missingPages.add(i);
+      }
+    }
+    if (missingPages.isNotEmpty) {
+      groupsWithIndex.add(
+        MapEntry(
+          groupsWithIndex.length + 1,
+        QuestionGroup(
+          title: '补充大题',
+          subject: '',
+          pages: missingPages,
+          questions: [],
+        ),
+        ),
+      );
+    }
+
+    if (groupsWithIndex.isEmpty) {
+      return [
+        QuestionGroup(
+          title: '第一大题：综合',
+          subject: '',
+          pages: List<int>.generate(pageCount, (i) => i + 1),
+          questions: [],
+        ),
+      ];
+    }
+
+    groupsWithIndex.sort((a, b) => a.key.compareTo(b.key));
+    return groupsWithIndex.map((e) => e.value).toList();
+  }
+
+  Future<List<QuestionGroup>> _recognizeGroupsFromPdf({
+    required String pdfPath,
+    required List<QuestionGroup> groups,
+    required int maxConcurrent,
+  }) async {
+    final total = groups.length;
+    int done = 0;
+    _setLoadingStage('正在完成题目…', current: done, total: total);
+
+    final tasks = <Future<List<QuestionItem>> Function()>[];
+    for (final group in groups) {
+      tasks.add(() async {
+        try {
+          final recognizedJson = await _questionRecognizer.recognizeQuestionFromPdfPages(
+            pdfPath: pdfPath,
+            pages: group.pages,
+            groupTitle: group.title,
+            subject: group.subject,
+          );
+          return AiJsonHelper.parseQuestions(recognizedJson);
+        } catch (e) {
+          return [
+            QuestionItem(
+              title: '识别失败',
+              status: QuestionStatus.error,
+              answer: '识别失败：$e',
+              explanation: '',
+            ),
+          ];
+        }
+      });
+    }
+
+    final results = await _runWithConcurrency<List<QuestionItem>>(
+      tasks,
+      maxConcurrent,
+      onProgress: (value) {
+        done = value;
+        _setLoadingStage('正在完成题目…', current: done, total: total);
+      },
+    );
+
+    final merged = <QuestionGroup>[];
+    for (int i = 0; i < groups.length; i++) {
+      final group = groups[i];
+      merged.add(
+        QuestionGroup(
+          title: group.title,
+          subject: group.subject,
+          pages: group.pages,
+          questions: results[i],
+        ),
+      );
+    }
+    return merged;
+  }
+
+  Future<List<T>> _runWithConcurrency<T>(
+    List<Future<T> Function()> tasks,
+    int maxConcurrent, {
+    required ValueChanged<int> onProgress,
+  }) async {
+    final total = tasks.length;
+    if (total == 0) return [];
+    final results = List<T?>.filled(total, null);
+    int nextIndex = 0;
+    int finished = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        int taskIndex;
+        if (nextIndex >= total) return;
+        taskIndex = nextIndex;
+        nextIndex++;
+        results[taskIndex] = await tasks[taskIndex]();
+        finished++;
+        onProgress(finished);
+      }
+    }
+
+    final workerCount = maxConcurrent <= 0 ? 1 : maxConcurrent;
+    final workers = List.generate(
+      workerCount > total ? total : workerCount,
+      (_) => worker(),
+    );
+    await Future.wait(workers);
+    return results.cast<T>();
   }
 
   Future<pw.Font?> _loadBundledFont() async {

@@ -4,31 +4,38 @@ import 'package:path_provider/path_provider.dart';
 
 import 'core/channel/channel_store.dart';
 import 'core/channel/channel_scope.dart';
+import 'core/settings/app_settings_scope.dart';
+import 'core/settings/app_settings_store.dart';
 import 'ui/home/home_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final store = await ChannelStore.load();
+  final settingsStore = await AppSettingsStore.load();
 
   final dir = await getTemporaryDirectory();
   Pdfrx.getCacheDirectory = () => dir.path;
 
-  runApp(MyApp(store: store));
+  runApp(MyApp(store: store, settingsStore: settingsStore));
 }
 
 class MyApp extends StatelessWidget {
   final ChannelStore store;
+  final AppSettingsStore settingsStore;
 
-  const MyApp({super.key, required this.store});
+  const MyApp({super.key, required this.store, required this.settingsStore});
 
   @override
   Widget build(BuildContext context) {
-    return ChannelScope( // 将 ChannelScope 放在 MaterialApp 之外
+    return ChannelScope(
       notifier: store,
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        home: const HomePage(), // HomePage 现在可以访问 ChannelScope 了
+      child: AppSettingsScope(
+        notifier: settingsStore,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: const HomePage(),
+        ),
       ),
     );
   }

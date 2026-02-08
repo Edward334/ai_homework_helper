@@ -18,4 +18,10 @@ class AppPaths {
 
     return file;
   }
+
+  /// 应用设置 JSON 文件
+  static Future<File> appSettingsFile() async {
+    final dir = await appDir();
+    return File('${dir.path}/app_settings.json');
+  }
 }

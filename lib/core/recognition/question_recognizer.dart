@@ -34,6 +34,28 @@ class QuestionRecognizer {
 }
 """;
 
+  static const String _classificationPrompt = """
+你将看到一份多页 PDF 的图片，请按“大题”进行分类，并输出 JSON。
+要求：
+1) 页码从 1 开始编号。
+2) 每一页必须且只能归入一个大题。
+3) 尽量把每一道大题分清楚。
+4) 只输出 JSON，不要附加任何说明或代码块格式。
+5) 题目名称尽量写成“第一大题：选择题/第二大题：填空题...”这类格式。
+
+输出格式示例（请严格遵循）：
+{
+  "groups": [
+    {
+      "index": 1,
+      "title": "第一大题：选择题",
+      "subject": "数学",
+      "pages": [1, 2]
+    }
+  ]
+}
+""";
+
   Future<String> recognizeQuestionFromImage(String imagePath) async {
     final String base64Image = await ImageToBase64.convert(imagePath);
 
@@ -51,45 +73,54 @@ class QuestionRecognizer {
     );
   }
 
+  Future<int> getPdfPageCount(String pdfPath) async {
+    final PdfDocument pdfDocument = await PdfDocument.openFile(pdfPath);
+    return pdfDocument.pages.length;
+  }
+
+  Future<String> classifyPdfQuestions(String pdfPath) async {
+    final pageCount = await getPdfPageCount(pdfPath);
+    final pages = List<int>.generate(pageCount, (i) => i + 1);
+    final content = await _buildPdfContent(
+      pdfPath: pdfPath,
+      pages: pages,
+      prompt: _classificationPrompt,
+    );
+    return await llmProvider.chatWithContent(
+      content: content,
+      model: model,
+      isThinkingModel: isThinkingModel,
+    );
+  }
+
+  Future<String> recognizeQuestionFromPdfPages({
+    required String pdfPath,
+    required List<int> pages,
+    required String groupTitle,
+    required String subject,
+  }) async {
+    final prompt = _buildGroupPrompt(groupTitle, subject);
+    final content = await _buildPdfContent(
+      pdfPath: pdfPath,
+      pages: pages,
+      prompt: prompt,
+    );
+    return await llmProvider.chatWithContent(
+      content: content,
+      model: model,
+      isThinkingModel: isThinkingModel,
+    );
+  }
+
   Future<String> recognizeQuestionFromPdf(String pdfPath) async {
     try {
-            final PdfDocument pdfDocument = await PdfDocument.openFile(pdfPath);
-      final List<Map<String, dynamic>> content = [
-        {'text': _prompt},
-      ];
-
-      for (var i = 0; i < pdfDocument.pages.length; i++) {
-        final PdfPage page = pdfDocument.pages[i];
-        final PdfImage? pageImage = await page.render(
-          width: 1024, // Render at a fixed width to optimize image size for LLM
-        );
-
-        if (pageImage == null) {
-          continue; // 跳过无法渲染的页面
-        }
-
-        final Uint8List imageBytes = pageImage.pixels;
-        final img.Image image = img.Image.fromBytes(
-          width: pageImage.width,
-          height: pageImage.height,
-          bytes: imageBytes.buffer,
-          numChannels: 4, // Assuming the pixel format is RGBA (4 channels)
-        );
-        if (image == null) {
-          continue; // Skip if image creation fails
-        }
-        final String base64Image = 'data:image/png;base64,${base64Encode(img.encodePng(image))}';
-
-        content.add({
-          'image_url': base64Image,
-        });
-      }
-      
-
-      if (content.length == 1) { // 只有提示，没有图片
-        throw Exception('PDF 中没有可识别的图像');
-      }
-
+      final pageCount = await getPdfPageCount(pdfPath);
+      final pages = List<int>.generate(pageCount, (i) => i + 1);
+      final content = await _buildPdfContent(
+        pdfPath: pdfPath,
+        pages: pages,
+        prompt: _prompt,
+      );
       return await llmProvider.chatWithContent(
         content: content,
         model: model,
@@ -98,5 +129,63 @@ class QuestionRecognizer {
     } catch (e) {
       throw Exception('PDF 识别失败: $e');
     }
+  }
+
+  String _buildGroupPrompt(String groupTitle, String subject) {
+    final subjectText = subject.trim().isEmpty ? '未知' : subject.trim();
+    return """
+你将只识别以下大题的所有小题：
+大题：$groupTitle
+科目：$subjectText
+
+请只输出该大题的小题，不要包含其他大题。
+输出格式要求与之前一致，只输出 JSON，不要附加说明或代码块。
+
+$_prompt
+""";
+  }
+
+  Future<List<Map<String, dynamic>>> _buildPdfContent({
+    required String pdfPath,
+    required List<int> pages,
+    required String prompt,
+  }) async {
+    final PdfDocument pdfDocument = await PdfDocument.openFile(pdfPath);
+    final List<Map<String, dynamic>> content = [
+      {'text': prompt},
+    ];
+
+    final pageSet = pages.where((p) => p > 0 && p <= pdfDocument.pages.length).toSet();
+    final pageList = pageSet.toList()..sort();
+
+    for (final pageNumber in pageList) {
+      final PdfPage page = pdfDocument.pages[pageNumber - 1];
+      final PdfImage? pageImage = await page.render(
+        width: 1024,
+      );
+
+      if (pageImage == null) {
+        continue;
+      }
+
+      final Uint8List imageBytes = pageImage.pixels;
+      final img.Image image = img.Image.fromBytes(
+        width: pageImage.width,
+        height: pageImage.height,
+        bytes: imageBytes.buffer,
+        numChannels: 4,
+      );
+      final String base64Image = 'data:image/png;base64,${base64Encode(img.encodePng(image))}';
+
+      content.add({
+        'image_url': base64Image,
+      });
+    }
+
+    if (content.length == 1) {
+      throw Exception('PDF 中没有可识别的图像');
+    }
+
+    return content;
   }
 }

@@ -2,11 +2,13 @@ class HistoryQuestion {
   final String question;
   final String answer;
   final String explanation;
+  final String groupTitle;
 
   HistoryQuestion({
     required this.question,
     required this.answer,
     required this.explanation,
+    this.groupTitle = '',
   });
 
   factory HistoryQuestion.fromJson(Map<String, dynamic> json) {
@@ -14,6 +16,7 @@ class HistoryQuestion {
       question: json['question'] ?? '',
       answer: json['answer'] ?? '',
       explanation: json['explanation'] ?? '',
+      groupTitle: json['groupTitle'] ?? '',
     );
   }
 
@@ -22,6 +25,7 @@ class HistoryQuestion {
       'question': question,
       'answer': answer,
       'explanation': explanation,
+      'groupTitle': groupTitle,
     };
   }
 }

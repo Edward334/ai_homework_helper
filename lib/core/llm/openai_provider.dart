@@ -8,6 +8,8 @@ import 'llm_provider.dart';
 class OpenAIProvider implements LLMProvider {
   final String apiUrl; // e.g. https://api.openai.com/v1
   final String apiKey;
+  final Duration _requestTimeout = const Duration(seconds: 90);
+  final int _maxAttempts = 3;
 
   OpenAIProvider({
     required this.apiUrl,
@@ -69,6 +71,22 @@ class OpenAIProvider implements LLMProvider {
     );
   }
 
+  Future<http.Response> _postWithRetry(Uri uri, Map<String, String> headers, String body) async {
+    int attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        final res = await http
+            .post(uri, headers: headers, body: body)
+            .timeout(_requestTimeout);
+        return res;
+      } catch (e) {
+        if (attempt >= _maxAttempts) rethrow;
+        await Future.delayed(Duration(milliseconds: 400 * attempt));
+      }
+    }
+  }
+
   @override
   Future<String> chatWithContent({
     required List<Map<String, dynamic>> content,
@@ -78,17 +96,17 @@ class OpenAIProvider implements LLMProvider {
     final base = _normalizeBase(apiUrl);
     final uri = Uri.parse('$base/chat/completions');
 
-    final res = await http.post(
-      uri,
-      headers: {
-        HttpHeaders.authorizationHeader: 'Bearer $apiKey',
-        HttpHeaders.contentTypeHeader: 'application/json',
-      },
-      body: jsonEncode({
-        'model': model,
-        'messages': _buildMessages(content),
-      }),
-    );
+    final headers = <String, String>{
+      HttpHeaders.authorizationHeader: 'Bearer $apiKey',
+      HttpHeaders.contentTypeHeader: 'application/json',
+      HttpHeaders.connectionHeader: 'close',
+    };
+    final body = jsonEncode({
+      'model': model,
+      'messages': _buildMessages(content),
+    });
+
+    final res = await _postWithRetry(uri, headers, body);
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('OpenAI error ${res.statusCode}: ${res.body}');
@@ -117,9 +135,11 @@ class OpenAIProvider implements LLMProvider {
 
     final client = HttpClient();
     try {
+      client.connectionTimeout = _requestTimeout;
       final req = await client.postUrl(uri);
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiKey');
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      req.headers.set(HttpHeaders.connectionHeader, 'close');
 
       req.write(jsonEncode({
         'model': model,
